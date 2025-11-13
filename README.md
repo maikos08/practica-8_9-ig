@@ -7,19 +7,23 @@
 
 
 ## Enlace al código en codesandbox.io
-[Clica aquí](TU_ENLACE_AQUI)
+[Clica aquí](https://codesandbox.io/p/sandbox/ig2526-s8-forked-qz2hzl)
 
 
 ## Video de la demo
 Aquí se muestra un video demostrativo de la demo (haz clic sobre el para ver el video)
-[![Ver demo](https://img.youtube.com/vi/Tes de la demo
+[![Ver demo](https://img.youtube.com/vi/HjtTUbw-B9E/0.jpg)](https://youtu.be/HjtTUbw-B9E)
+
+Peuqeño GIF
+
 - **Vista 3D**: Usa el mouse para orbitar, zoom y panear con los controles OrbitControls.
+
 - **Control de velocidad**:
   - Flecha Arriba (↑): Aumentar velocidad de simulación (máximo 5x)
   - Flecha Abajo (↓): Reducir velocidad de simulación (mínimo 0.1x)
   - Barra Espaciadora: Pausar/Reanudar simulación
+  
 - **Visualización**:
-  - El tiempo avanza automáticamente desde el 1 de mayo de 2018
   - El ciclo día/noche cambia el cielo de forma dinámica (madrugada, amanecer, mediodía, atardecer, noche)
   - Sol visible entre 6:00 AM - 6:00 PM
   - Luna visible entre 6:00 PM - 6:00 AM
@@ -145,6 +149,145 @@ Convierte string "DD/MM/YYYY HH:MM" a objeto Date:
 
 ### 5. Función `Map2Range(val, vmin, vmax, dmin, dmax)`
 Mapea valor de rango [vmin, vmax] a [dmin, dmax] con interpolación lineal:
-```javascript
+```
 const t = 1 - (vmax - val) / (vmax - vmin);
 return dmin + t * (dmax - dmin);
+```
+Usada para transformar coordenadas geográficas (lon/lat) a posiciones en el plano 3D.
+
+### 6. Sistema de Lanzamiento de Bicis
+
+#### `lanzarBici(o, d, tiempoInicio, tiempoFin)`
+Crea una bici que vuela de origen `o` a destino `d`:
+- Lanza onda expansiva cyan en origen (`lanzarOnda(o, 0x00ffff)`).
+- Si `modeloBiciOriginal` existe:
+  - Clona el modelo 3D con `clone()`.
+  - Crea `ShaderMaterial` con shader de estela.
+  - Itera sobre hijos del modelo (`traverse`) y aplica material shader clonado a cada mesh.
+  - Posiciona en origen, añade a escena.
+  - Añade a `bicisEnAire` con datos: `{ mesh, start, end, t: 0, tiempoInicio, tiempoFin, esBici3D: true }`.
+- Fallback: Si no hay modelo, llama a `lanzarBiciCilindro()` que usa geometría cilíndrica simple.
+
+#### Trayectoria y Timing
+En `animate()`, para cada bici en `bicisEnAire`:
+- Calcula progreso real desde el CSV:
+  ```
+  const duracionTotal = v.tiempoFin.getTime() - v.tiempoInicio.getTime();
+  const tiempoTranscurrido = fechaActual.getTime() - v.tiempoInicio.getTime();
+  v.t = Math.max(0, Math.min(1, tiempoTranscurrido / duracionTotal));
+  ```
+- Si `v.t >= 1`: Lanza onda magenta en destino (`lanzarOnda(v.end, 0xff00ff)`), elimina mesh, retorna `false`.
+- Interpola posición con `lerp()`: `p = start.clone().lerp(end, t)`.
+- Trayectoria parabólica: `p.y = 0.05 + 0.35 * Math.sin(t * Math.PI)` (altura máxima 0.4 a mitad del trayecto).
+- Orienta bici hacia destino con `lookAt(end)`.
+- Genera partículas trail si no está pausado (`velocidadSimulacion > 0`):
+  - 40% probabilidad cada frame.
+  - Copia posición de bici, desplaza ligeramente hacia abajo (-0.02 en Y).
+  - Color según tipo (cyan para 3D, magenta para cilindro).
+
+### 7. Sistema de Efectos Visuales
+
+#### Ondas Expansivas
+Pool de 30 anillos reutilizables:
+- Geometría: `RingGeometry(0.02, 0.04, 32)` para anillo fino.
+- Material: Transparente, `side: DoubleSide`, `depthTest: false` para renderizado correcto.
+- Animación en `animate()`:
+  - `vida` decrementa 0.02 por frame.
+  - Escala crece: `escala = 1 + (1 - vida) * velocidad * 4`.
+  - Opacidad fade-out: `opacity = vida * 0.95`.
+  - Color según evento (cyan al despegar, magenta al aterrizar).
+
+#### Partículas Trail
+Pool de 200 esferas pequeñas:
+- Geometría: `SphereGeometry(0.004, 6, 6)` de baja resolución.
+- Material: Transparente, `AdditiveBlending` para efecto luminoso acumulativo.
+- Animación:
+  - `vida` decrementa 0.04 por frame (desaparecen más rápido que ondas).
+  - Opacidad: `vida * 0.7`.
+  - Escala crece: `vida * 2`.
+  - Caída lenta: `position.y -= 0.01` por frame.
+
+#### Sol y Luna
+Actualizados cada frame según hora:
+- Ángulo calculado desde hora: `angulo = ((hora - 6) / 12) * PI` para sol (6 AM a 6 PM = 0° a 180°).
+- Posición en arco:
+  ```javascript
+  sol.position.set(
+    Math.cos(angulo) * 8,  // X: movimiento horizontal
+    Math.sin(angulo) * 6 + 3,  // Y: arco vertical con offset +3
+    -3  // Z: profundidad fija
+  );
+  ```
+- Visibilidad: `sol.visible = hora >= 6 && hora <= 18`.
+- Luna usa ángulo desplazado `+6` horas (visible de noche).
+
+### 8. Función `actualizarDensidadMapa()`
+Calcula densidad de actividad en tiempo real:
+- Resetea `actividadMapa` a ceros.
+- Itera sobre `datosSitycleta` (límite 1000 para rendimiento):
+  - Si alquiler está activo (`t_inicio <= fechaActual && t_fin >= fechaActual`):
+    - Busca estaciones origen y destino en `datosEstaciones`.
+    - Para cada estación:
+      - Normaliza coordenadas: `normX = (lon - minlon) / (maxlon - minlon)`.
+      - Calcula índice de celda: `gridX = floor(normX * 8)`, `gridY = floor(normY * 8)`.
+      - Incrementa `actividadMapa[gridY * 8 + gridX]`.
+- Calcula `maxDens = max(...actividadMapa)` y actualiza uniform del shader.
+
+### 9. Función `animate()` - Bucle Principal
+Ejecuta cada frame con `requestAnimationFrame`:
+- Actualiza tiempo: `totalMinutos += velocidadSimulacion`.
+- Calcula `fechaActual = new Date(fechaInicio + totalMinutos * 60000)`.
+- Actualiza reloj DOM con `toLocaleString("es-ES", {...})`.
+- **Skybox**: Actualiza uniforms `u_time` y `u_horaDelDia`.
+- **Sol/Luna**: Calcula ángulos, actualiza posiciones y visibilidad.
+- **Heatmap**: Llama a `actualizarDensidadMapa()`, actualiza uniforms del shader del mapa.
+- **Lanzamiento de bicis**: 
+  - Busca alquileres que inician en el minuto actual.
+  - Limita a 50 bicis por minuto para rendimiento.
+  - Convierte coordenadas de estaciones origen/destino a vectores 3D.
+  - Llama a `lanzarBici(A, B, t_inicio, t_fin)`.
+- **Actualización de bicis**: Filtra `bicisEnAire`, actualiza posiciones, genera partículas, actualiza uniforms de shaders.
+- **Ondas y partículas**: Actualiza vida, escalas, opacidades; elimina invisibles.
+- **Estaciones**: 
+  - Crea set `act` con nombres de estaciones activas.
+  - Para cada esfera de estación:
+    - Si activa: Escala 2.5, color rosa (0xff0055), pulsación con `sin()`.
+    - Si inactiva: Escala 1, color verde (0x00ff88).
+- **Panel de stats**: 
+  - Cuenta `bicisEnAire.length`.
+  - Cuenta `act.size` (estaciones únicas activas).
+  - Filtra alquileres del día actual.
+  - Actualiza `stats.innerHTML` con HTML formateado.
+- **Renderizado**: Actualiza `controls.update()`, renderiza escena con `renderer.render(scene, camera)`.
+
+### 10. Consideraciones Técnicas
+
+#### Rendimiento
+- **Pools de objetos**: Reutilización de ondas y partículas evita creación/destrucción constante (garbage collection).
+- **Límites**: 100 estaciones, 10000 alquileres, 50 bicis/minuto, 1000 búsquedas en heatmap.
+- **Geometrías low-poly**: Esferas con segmentos reducidos (16×16), partículas con 6 segmentos.
+- **Shader optimization**: Cálculos en GPU, uniforms en lugar de atributos cuando posible.
+
+#### Precisión Temporal
+- Sistema basado en timestamps reales del CSV.
+- `tiempoTranscurrido / duracionTotal` garantiza sincronización exacta.
+- Pausa congela `fechaActual`, bicis quedan suspendidas en posición actual.
+
+#### Shaders Avanzados
+- **Blending modes**: `AdditiveBlending` para partículas (efecto luminoso acumulativo), `NormalBlending` para ondas.
+- **Depth control**: `depthTest: false` en ondas para renderizado correcto sobre el mapa.
+- **Uniforms dinámicos**: Actualizados cada frame para animaciones fluidas.
+- **Varying variables**: Pasan datos de vertex a fragment shader (UV, posición, normal).
+
+#### Extensibilidad
+- Fácil añadir más efectos: Nuevos pools, shaders adicionales.
+- Modular: Funciones independientes para cada sistema.
+- Datos externos: CSV permite cambiar dataset sin modificar código.
+
+### Consideraciones Generales
+- **Ejecución**: Requiere servidor local por CORS en carga de archivos (CSV, texturas, modelos GLB). Usar `npx serve` o similar.
+- **Compatibilidad**: Shaders GLSL compatibles con WebGL 1.0, funciona en navegadores modernos.
+- **Educativo**: Ideal para aprendizaje de shaders, sistemas de partículas, visualización de datos geoespaciales y temporales.
+- **Realismo visual**: Ciclo día/noche, iluminación dinámica, físicas de trayectorias parabólicas.
+
+Este proyecto combina renderizado 3D avanzado, programación de shaders GLSL, procesamiento de datos CSV y diseño de interfaces interactivas, demostrando técnicas fundamentales de informática gráfica aplicadas a visualización de datos reales.
